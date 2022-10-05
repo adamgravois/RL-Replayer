@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+#
+import sys
+sys.path.append(r'T:\agTools\scripts')
+import agFileTools
+
+
+json_file = r"T:\RL-Replayer\scratch\replay_test_220926.json"
+event_names_list = ["TAGame.RBActor_TA:ReplicatedRBState"]
+
+replay_dict_struct = { "content":
+                           {"body":
+                                {"frames": []}
+                            }
+                       }
+actor_event_dict_struct = {"actor_id": {"value": 1},
+                            "value": { "updated": [] }
+                     }
+
+event_dict_struct =  { "name": "TAGame.RBActor_TA:ReplicatedRBState",
+                        "value": { "rigid_body_state": {}}
+                     }
+
+
+rbd_data_struct = {"location": {"x": 0, "y": 0, "z": 0},
+                    "rotation": {
+                      "quaternion": {"w": 0.0, "x": 0.0, "y": 0.0, "z": 0.0} }
+                   }
+
+
+def recursive_dict_compare(dict_a, dict_b):
+    result_dict = {}
+    for key, value in dict_a.items():
+
+        if not key in dict_b: continue
+        # print("     key>",key, "value>", dict_b[value])
+        if type(value) == dict:
+            # print('going deeper')
+            new_value = recursive_dict_compare(dict_a[key], dict_b[key])
+        else:
+            new_value = dict_b[key]
+        result_dict[key]= new_value
+    return result_dict
+
+def get_rigid_body_data(rigid_body_state_dict):
+
+    rbd_dict = recursive_dict_compare(rbd_data_struct, rigid_body_state_dict)
+    return rbd_dict
+
+def get_new_event_dict(event):
+    new_event_dict = {"name": "TAGame.RBActor_TA:ReplicatedRBState",
+                      "value": { "rigid_body_state": { }}}  # event_dict_struct.copy()
+    if "value" not in event:
+        # print('   xxx no event value found, bailing')
+        return None
+    if "rigid_body_state" not in event["value"]:
+        # print('   xxx no rbs found in event value, bailing')
+        return None
+    print('    found >', event["name"])
+    # get rigid body transform data
+    rbd_dict = get_rigid_body_data(event["value"]["rigid_body_state"])
+    if not rbd_dict:
+        print('    xxx did not return rbd_dict, skipping')
+        return None
+    # print('    returned rbd_dict>', rbd_dict)
+    # assemble new dict entry
+    new_event_dict["value"]["rigid_body_state"] = rbd_dict.copy()
+
+    return new_event_dict
+
+
+def log_replaction_types(replications_list, event_type_dict):
+    print(' logging replications with ', len(replications_list), 'actor items')
+    for actor_index, actor_event_dict in enumerate(replications_list):
+        print("  reading index", actor_index, "actor event dict>", actor_event_dict["actor_id"])
+        # Does this match the wide pattern?
+        if "value" not in actor_event_dict: continue
+        if "updated" not in actor_event_dict["value"]: continue
+        new_actor_event_dict = { "actor_id": {"value": 0}, "value": { "updated": []}}  # actor_event_dict_struct.copy()
+        keep_actor = False
+        # get actor ID
+        new_actor_event_dict["actor_id"]["value"] = actor_event_dict["actor_id"]["value"]
+        # OK, let's start processing events!
+        # print("   there are ", len(actor_event_dict["value"]["updated"]), "update events in it")
+        for event_index, event in enumerate(actor_event_dict["value"]["updated"]):
+
+            # Is it the kind of event we want?
+            if event["name"] not in event_type_dict: # == "TAGame.RBActor_TA:ReplicatedRBState":
+                # go get em
+                new_event_name = event["name"]
+                print('  logging new event>', new_event_name)
+                new_event_value = event["value"]
+                event_type_dict[new_event_name] = {"value":new_event_value, "count":1}
+            else:
+                event_name = event["name"]
+                count = event_type_dict[event_name]["count"]
+                count += 1
+                event_type_dict[event_name]["count"] = count
+
+    return event_type_dict
+
+
+
+def get_replications(replications_list, time_stamp):
+    print(' getting replications with ', len(replications_list), 'actor items')
+    new_replication_list = []
+    # one replication list per frame
+    # multiple possible actor event dicts per replication list
+    # one actor per actor event dict
+    # multiple possible events per actor event dict ( value - updated )
+    for actor_index, actor_event_dict in enumerate(replications_list):
+        print("  reading index", actor_index, "actor event dict>", actor_event_dict["actor_id"])
+        # Does this match the wide pattern?
+        if "value" not in actor_event_dict: continue
+        if "updated" not in actor_event_dict["value"]: continue
+        new_actor_event_dict = { "actor_id": {"value": 0}, "value": { "updated": []}}  # actor_event_dict_struct.copy()
+        keep_actor = False
+        # get actor ID
+        new_actor_event_dict["actor_id"]["value"] = actor_event_dict["actor_id"]["value"]
+        # OK, let's start processing events!
+        # print("   there are ", len(actor_event_dict["value"]["updated"]), "update events in it")
+        for event_index, event in enumerate(actor_event_dict["value"]["updated"]):
+            # print('---------- event number', event_index)
+            # get value / updated /  [0] / name
+            # print('   index>', event_index, 'event >', event)
+            # Is it the kind of event we want?
+            if event["name"] == "TAGame.RBActor_TA:ReplicatedRBState":
+                # go get em
+                new_event_dict = get_new_event_dict(event)
+                if new_event_dict:
+                    new_actor_event_dict["value"]["updated"].append(new_event_dict.copy())
+                    keep_actor = True
+                    print('    added', event_index, ' to actor update list>', new_actor_event_dict)
+                else:
+                    continue
+
+
+                #print('loc.x >', new_actor_event_dict['value']['updated'][event_index]['value']['rigid_body_state']['location']['x'])
+
+            else:
+                print('  xxx event name was >', event["name"], '... skipping')
+
+        # add to list
+        if keep_actor:
+            new_replication_list.append(new_actor_event_dict.copy())
+            # print('new repl list> ', new_replication_list)
+
+    # print('  Returning New Repl List >', new_replication_list)
+    print('########### leaving GET_REPLICATIONS ##########')
+    return new_replication_list
+
+def get_frames_json(input_json):
+    full_dict = agFileTools.read_json(input_json)
+
+    # new_dict = replay_dict_struct.copy()
+    frames_list = full_dict["content"]["body"]["frames"]
+
+    return frames_list
+
+
+def write_frames_json(frames_list, output_json_file):
+    print('>>Writing Frames List to json')
+    # wrap it in
+    out_data = { "content": { "body" : { "frames": frames_list}}}
+
+    agFileTools.write_json(out_data, output_json_file)
+
+
+
+def main(input_json_file):
+    print('starting main loop w file>', input_json_file)
+    # load json file
+    frames_list = get_frames_json(input_json_file) # get content / body / frames
+    new_frames_list = []
+    event_type_dict = {}
+    print('Dictionary has>', len(frames_list), 'entries')
+    for i, frame_dict in enumerate(frames_list):
+        # if i > 20: break
+        # print('frame dict>', frame_dict)
+        if "replications" in frame_dict:
+            new_frame_dict = {}
+            frame_time = frame_dict["time"]
+            print('found replication at time> ', frame_time)
+            event_type_dict = log_replaction_types(frame_dict["replications"], event_type_dict)
+            #new_replications_list = get_replications(frame_dict["replications"], frame_time)
+            # did we get a result? if so, assemble new entry
+            #if new_replications_list:
+            #    print('=====================================================================')
+            #    print('TTTT logging event at time>', frame_time)
+                # print('new replications list>', new_replications_list)
+            #    new_frame_dict = {"time": frame_time, "replications": new_replications_list.copy()}
+            #    new_frames_list.append(new_frame_dict.copy())
+
+            #else:
+            #    continue
+        else:
+            continue
+
+    # write results
+    output_json_file = input_json_file.replace('.json', '-events.json')
+
+    write_frames_json(event_type_dict, output_json_file)
+    print('finished looop')
+
+
+
+main(json_file)
