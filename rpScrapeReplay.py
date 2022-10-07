@@ -99,6 +99,45 @@ def log_replaction_types(replications_list, event_type_dict):
 
     return event_type_dict
 
+def log_spawn_events(replications_list, spawn_event_list, time):
+    print(' logging spawns and destroys with ', len(replications_list), 'actor items')
+    for actor_index, actor_event_dict in enumerate(replications_list):
+        print("  reading index", actor_index, "actor event dict>", actor_event_dict["actor_id"])
+        # Does this match the wide pattern?
+        if "value" not in actor_event_dict: continue
+        if "spawned" in actor_event_dict["value"]:
+            new_actor_event_dict = { }
+            keep_actor = False
+            # get time
+            new_actor_event_dict["time"] = time
+            # get actor ID
+            new_actor_event_dict["actor_id"] = actor_event_dict["actor_id"]["value"]
+            new_actor_event_dict["event"] = "spawned"
+
+            # get name
+            new_actor_event_dict["name"] = actor_event_dict["value"]["spawned"]["name"]
+            new_actor_event_dict["name_index"] = actor_event_dict["value"]["spawned"]["name_index"]
+
+            # get class
+            new_actor_event_dict["object_id"] = actor_event_dict["value"]["spawned"]["object_id"]
+            # get object ID
+            new_actor_event_dict["class"] = actor_event_dict["value"]["spawned"]["class_name"]
+            # get object Name
+            new_actor_event_dict["object_name"] = actor_event_dict["value"]["spawned"]["object_name"]
+            spawn_event_list.append(new_actor_event_dict)
+        elif "destroyed" in actor_event_dict["value"]:    # Is it the kind of event we want?
+            new_actor_event_dict = { }
+            keep_actor = False
+            # get time
+            new_actor_event_dict["time"] = time
+            # get actor ID
+            new_actor_event_dict["actor_id"] = actor_event_dict["actor_id"]["value"]
+            new_actor_event_dict["event"] = "destroyed"
+            spawn_event_list.append(new_actor_event_dict)
+        else:
+            continue
+    return spawn_event_list
+
 
 
 def get_replications(replications_list, time_stamp):
@@ -165,7 +204,42 @@ def write_frames_json(frames_list, output_json_file):
 
     agFileTools.write_json(out_data, output_json_file)
 
+def class_mappings(input_json_file):
+    data = agFileTools.read_json(input_json_file)
+    class_maps_list = data["content"]["body"]["class_mappings"]
+    output_json_file = input_json_file.replace('.json', '-class_mappings.json')
+    agFileTools.write_json(class_maps_list, output_json_file)
 
+def caches(input_json_file):
+    data = agFileTools.read_json(input_json_file)
+    caches_list = data["content"]["body"]["caches"]
+
+    new_cache_list = []
+    for cache in caches_list:
+        cache_id = cache["cache_id"]
+        class_id = cache["class_id"]
+        parent_cache_id = cache["parent_cache_id"]
+        map_list = cache["attribute_mappings"]
+        if map_list:   # are there any mappings to report?
+            for item in map_list:
+                new_entry = { "cache_id" : cache["cache_id"],
+                              "class_id" : cache["class_id"],
+                              "parent_cache_id" : cache["parent_cache_id"],
+                              "object_id" : item["object_id"],
+                              "stream_id" : item["stream_id"]
+                              }
+                new_cache_list.append(new_entry)
+        else:
+            new_entry = {"cache_id": cache["cache_id"],
+                         "class_id": cache["class_id"],
+                         "parent_cache_id": cache["parent_cache_id"],
+                         "object_id": "",
+                         "stream_id": ""
+                         }
+            new_cache_list.append(new_entry)
+
+    output_json_file = input_json_file.replace('.json', '-caches.json')
+    agFileTools.write_json(new_cache_list, output_json_file )
 
 def main(input_json_file):
     print('starting main loop w file>', input_json_file)
@@ -173,6 +247,7 @@ def main(input_json_file):
     frames_list = get_frames_json(input_json_file) # get content / body / frames
     new_frames_list = []
     event_type_dict = {}
+    spawn_event_list = []
     print('Dictionary has>', len(frames_list), 'entries')
     for i, frame_dict in enumerate(frames_list):
         # if i > 20: break
@@ -181,7 +256,8 @@ def main(input_json_file):
             new_frame_dict = {}
             frame_time = frame_dict["time"]
             print('found replication at time> ', frame_time)
-            event_type_dict = log_replaction_types(frame_dict["replications"], event_type_dict)
+            spawn_event_list = log_spawn_events(frame_dict["replications"],spawn_event_list,frame_time)
+            #event_type_dict = log_replaction_types(frame_dict["replications"], event_type_dict)
             #new_replications_list = get_replications(frame_dict["replications"], frame_time)
             # did we get a result? if so, assemble new entry
             #if new_replications_list:
@@ -197,11 +273,11 @@ def main(input_json_file):
             continue
 
     # write results
-    output_json_file = input_json_file.replace('.json', '-events.json')
-
-    write_frames_json(event_type_dict, output_json_file)
+    output_json_file = input_json_file.replace('.json', '-spawns.json')
+    agFileTools.write_json(spawn_event_list, output_json_file)
+    #write_frames_json(event_type_dict, output_json_file)
     print('finished looop')
 
-
-
+#class_mappings(json_file)
+#caches(json_file)
 main(json_file)
