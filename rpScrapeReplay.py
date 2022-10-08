@@ -48,8 +48,7 @@ def get_rigid_body_data(rigid_body_state_dict):
     return rbd_dict
 
 def get_new_event_dict(event):
-    new_event_dict = {"name": "TAGame.RBActor_TA:ReplicatedRBState",
-                      "value": { "rigid_body_state": { }}}  # event_dict_struct.copy()
+    new_event_dict = {}  # event_dict_struct.copy()
     if "value" not in event:
         # print('   xxx no event value found, bailing')
         return None
@@ -64,12 +63,13 @@ def get_new_event_dict(event):
         return None
     # print('    returned rbd_dict>', rbd_dict)
     # assemble new dict entry
-    new_event_dict["value"]["rigid_body_state"] = rbd_dict.copy()
+    new_event_dict["location"] = {key:rbd_dict["location"][key] for key in ["x", "y", "z"]}   #  ["value"]["rigid_body_state"] = rbd_dict.copy()
+    new_event_dict["rotation"] = {key:rbd_dict["rotation"]["quaternion"][key] for key in ["w", "x", "y", "z"]}
+    return rbd_dict
+    #return new_event_dict
 
-    return new_event_dict
 
-
-def log_replaction_types(replications_list, event_type_dict):
+def log_replication_types(replications_list, event_type_dict):
     print(' logging replications with ', len(replications_list), 'actor items')
     for actor_index, actor_event_dict in enumerate(replications_list):
         print("  reading index", actor_index, "actor event dict>", actor_event_dict["actor_id"])
@@ -79,7 +79,7 @@ def log_replaction_types(replications_list, event_type_dict):
         new_actor_event_dict = { "actor_id": {"value": 0}, "value": { "updated": []}}  # actor_event_dict_struct.copy()
         keep_actor = False
         # get actor ID
-        new_actor_event_dict["actor_id"]["value"] = actor_event_dict["actor_id"]["value"]
+        actor_id = actor_event_dict["actor_id"]["value"]
         # OK, let's start processing events!
         # print("   there are ", len(actor_event_dict["value"]["updated"]), "update events in it")
         for event_index, event in enumerate(actor_event_dict["value"]["updated"]):
@@ -139,7 +139,6 @@ def log_spawn_events(replications_list, spawn_event_list, time):
     return spawn_event_list
 
 
-
 def get_replications(replications_list, time_stamp):
     print(' getting replications with ', len(replications_list), 'actor items')
     new_replication_list = []
@@ -147,15 +146,18 @@ def get_replications(replications_list, time_stamp):
     # multiple possible actor event dicts per replication list
     # one actor per actor event dict
     # multiple possible events per actor event dict ( value - updated )
+    # rebuild to simplify:
+    # return a list of update_events that look like:
+    # ( time : 0.0, actor_id: 1, location: (0,0,0), rotation: (0,0,0,0) }
+
     for actor_index, actor_event_dict in enumerate(replications_list):
         print("  reading index", actor_index, "actor event dict>", actor_event_dict["actor_id"])
         # Does this match the wide pattern?
         if "value" not in actor_event_dict: continue
         if "updated" not in actor_event_dict["value"]: continue
-        new_actor_event_dict = { "actor_id": {"value": 0}, "value": { "updated": []}}  # actor_event_dict_struct.copy()
         keep_actor = False
         # get actor ID
-        new_actor_event_dict["actor_id"]["value"] = actor_event_dict["actor_id"]["value"]
+        actor_id = actor_event_dict["actor_id"]["value"]
         # OK, let's start processing events!
         # print("   there are ", len(actor_event_dict["value"]["updated"]), "update events in it")
         for event_index, event in enumerate(actor_event_dict["value"]["updated"]):
@@ -167,26 +169,21 @@ def get_replications(replications_list, time_stamp):
                 # go get em
                 new_event_dict = get_new_event_dict(event)
                 if new_event_dict:
-                    new_actor_event_dict["value"]["updated"].append(new_event_dict.copy())
-                    keep_actor = True
-                    print('    added', event_index, ' to actor update list>', new_actor_event_dict)
+                    print('    adding event', event_index, ' to update list')
+                    new_replication_list.append({"time": time_stamp,
+                                                 "actor_id": actor_id,
+                                                 "location": {key:new_event_dict["location"][key] for key in ["x", "y", "z"]},   #  ["value"]["rigid_body_state"] = rbd_dict.copy()
+                                                 "rotation": {key:new_event_dict["rotation"]["quaternion"][key] for key in ["w", "x", "y", "z"]}
+                                                 })
                 else:
                     continue
-
-
-                #print('loc.x >', new_actor_event_dict['value']['updated'][event_index]['value']['rigid_body_state']['location']['x'])
-
             else:
                 print('  xxx event name was >', event["name"], '... skipping')
-
-        # add to list
-        if keep_actor:
-            new_replication_list.append(new_actor_event_dict.copy())
-            # print('new repl list> ', new_replication_list)
 
     # print('  Returning New Repl List >', new_replication_list)
     print('########### leaving GET_REPLICATIONS ##########')
     return new_replication_list
+
 
 def get_frames_json(input_json):
     full_dict = agFileTools.read_json(input_json)
@@ -241,7 +238,54 @@ def caches(input_json_file):
     output_json_file = input_json_file.replace('.json', '-caches.json')
     agFileTools.write_json(new_cache_list, output_json_file )
 
-def main(input_json_file):
+
+def spawn_events(input_json_file):
+    print('starting main loop w file>', input_json_file)
+    # load json file
+    frames_list = get_frames_json(input_json_file)  # get content / body / frames
+    new_frames_list = []
+    event_type_dict = {}
+    spawn_event_list = []
+    print('Dictionary has>', len(frames_list), 'entries')
+    for i, frame_dict in enumerate(frames_list):
+        # if i > 20: break
+        # print('frame dict>', frame_dict)
+        if "replications" in frame_dict:
+            frame_time = frame_dict["time"]
+            print('found replication at time> ', frame_time)
+            spawn_event_list = log_spawn_events(frame_dict["replications"], spawn_event_list, frame_time)
+        else:
+            continue
+
+    # write results
+    output_json_file = input_json_file.replace('.json', '-spawns.json')
+    agFileTools.write_json(spawn_event_list, output_json_file)
+    print('finished loop')
+
+def get_event_types(input_json_file):
+    print('starting main loop w file>', input_json_file)
+    # load json file
+    frames_list = get_frames_json(input_json_file) # get content / body / frames
+    event_type_dict = {}
+    print('Dictionary has>', len(frames_list), 'entries')
+    for i, frame_dict in enumerate(frames_list):
+        # if i > 20: break
+        # print('frame dict>', frame_dict)
+        if "replications" in frame_dict:
+            new_frame_dict = {}
+            frame_time = frame_dict["time"]
+            print('found replication at time> ', frame_time)
+            event_type_dict = log_replication_types(frame_dict["replications"], event_type_dict)
+        else:
+            continue
+
+    # write results
+    output_json_file = input_json_file.replace('.json', '-eventTypes.json')
+    agFileTools.write_json(event_type_dict, output_json_file)
+    #write_frames_json(new_frames_list, output_json_file)
+    print('finished looop')
+
+def get_update_events(input_json_file):
     print('starting main loop w file>', input_json_file)
     # load json file
     frames_list = get_frames_json(input_json_file) # get content / body / frames
@@ -256,28 +300,26 @@ def main(input_json_file):
             new_frame_dict = {}
             frame_time = frame_dict["time"]
             print('found replication at time> ', frame_time)
-            spawn_event_list = log_spawn_events(frame_dict["replications"],spawn_event_list,frame_time)
-            #event_type_dict = log_replaction_types(frame_dict["replications"], event_type_dict)
-            #new_replications_list = get_replications(frame_dict["replications"], frame_time)
+            new_replications_list = get_replications(frame_dict["replications"], frame_time)
             # did we get a result? if so, assemble new entry
-            #if new_replications_list:
-            #    print('=====================================================================')
-            #    print('TTTT logging event at time>', frame_time)
+            if new_replications_list:
+                print('=====================================================================')
+                print('TTTT logging event at time>', frame_time)
                 # print('new replications list>', new_replications_list)
-            #    new_frame_dict = {"time": frame_time, "replications": new_replications_list.copy()}
-            #    new_frames_list.append(new_frame_dict.copy())
+                new_frames_list.extend(new_replications_list.copy())
 
-            #else:
-            #    continue
+            else:
+                continue
         else:
             continue
 
     # write results
-    output_json_file = input_json_file.replace('.json', '-spawns.json')
-    agFileTools.write_json(spawn_event_list, output_json_file)
-    #write_frames_json(event_type_dict, output_json_file)
+    output_json_file = input_json_file.replace('.json', '-updates.json')
+    agFileTools.write_json(new_frames_list, output_json_file)
+    #write_frames_json(new_frames_list, output_json_file)
     print('finished looop')
 
 #class_mappings(json_file)
 #caches(json_file)
-main(json_file)
+#get_update_events(json_file)
+get_event_types(json_file)
