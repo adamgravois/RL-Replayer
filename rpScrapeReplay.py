@@ -5,7 +5,7 @@ sys.path.append(r'T:\agTools\scripts')
 import agFileTools
 
 
-json_file = r"T:\RL-Replayer\scratch\replay_test_220926.json"
+json_file = r"T:\RL-Replayer\scratch\replay_test_220926mini-trunc.json"
 event_names_list = ["TAGame.RBActor_TA:ReplicatedRBState"]
 
 replay_dict_struct = { "content":
@@ -68,6 +68,35 @@ def get_new_event_dict(event):
     return rbd_dict
     #return new_event_dict
 
+def log_replication_value_types(replications_list, event_type_dict):
+    print(' logging replications with ', len(replications_list), 'actor items')
+    for actor_index, actor_event_dict in enumerate(replications_list):
+        print("  reading index", actor_index, "actor event dict>", actor_event_dict["actor_id"])
+        # Does this match the wide pattern?
+        if "value" not in actor_event_dict: continue
+        if "updated" not in actor_event_dict["value"]: continue
+        new_actor_event_dict = { "actor_id": {"value": 0}, "value": { "updated": []}}  # actor_event_dict_struct.copy()
+        keep_actor = False
+        # get actor ID
+        actor_id = actor_event_dict["actor_id"]["value"]
+        # OK, let's start processing events!
+        # print("   there are ", len(actor_event_dict["value"]["updated"]), "update events in it")
+        for event_index, event in enumerate(actor_event_dict["value"]["updated"]):
+
+            # Is it the kind of event we want?
+            if event["name"] not in event_type_dict: # == "TAGame.RBActor_TA:ReplicatedRBState":
+                # go get em
+                new_event_name = event["name"]
+                print('  logging new event>', new_event_name)
+                new_event_value = event["value"]
+                event_type_dict[new_event_name] = {"value":new_event_value, "count":1}
+            else:
+                event_name = event["name"]
+                count = event_type_dict[event_name]["count"]
+                count += 1
+                event_type_dict[event_name]["count"] = count
+
+    return event_type_dict
 
 def log_replication_types(replications_list, event_type_dict):
     print(' logging replications with ', len(replications_list), 'actor items')
@@ -138,6 +167,10 @@ def log_spawn_events(replications_list, spawn_event_list, time):
             continue
     return spawn_event_list
 
+def get_pri_id(event):
+    print('player replication info!')
+    pri_id = event["value"]["flagged_int"]["int"]
+    return pri_id
 
 def get_replications(replications_list, time_stamp):
     print(' getting replications with ', len(replications_list), 'actor items')
@@ -148,16 +181,32 @@ def get_replications(replications_list, time_stamp):
     # multiple possible events per actor event dict ( value - updated )
     # rebuild to simplify:
     # return a list of update_events that look like:
-    # ( time : 0.0, actor_id: 1, location: (0,0,0), rotation: (0,0,0,0) }
+    # ( time : 0.0, actor_id: 1, event_type: location: (0,0,0), rotation: (0,0,0,0) }
 
     for actor_index, actor_event_dict in enumerate(replications_list):
         print("  reading index", actor_index, "actor event dict>", actor_event_dict["actor_id"])
         # Does this match the wide pattern?
-        if "value" not in actor_event_dict: continue
-        if "updated" not in actor_event_dict["value"]: continue
-        keep_actor = False
         # get actor ID
         actor_id = actor_event_dict["actor_id"]["value"]
+        # just in case
+        if "value" not in actor_event_dict: continue
+        if "spawned" in actor_event_dict["value"]:
+            # get spawn type
+            if "class_name" not in actor_event_dict["value"]["spawned"]: continue
+            class_name = actor_event_dict["value"]["spawned"]["class_name"]
+            # if it's the type we're looking for, make an entry
+            if class_name == "TAGame.Ball_TA" or class_name == "TAGame.Car_TA":
+                new_replication_list.append({"time": time_stamp,
+                                             "actor_id": actor_id,
+                                             "event_type": "spawned",
+                                             "class_name": class_name})
+        if "destroyed" in actor_event_dict["value"]:
+            # get
+            new_replication_list.append({"time": time_stamp,
+                                         "actor_id": actor_id,
+                                         "event_type": "destroyed"})
+        if "updated" not in actor_event_dict["value"]: continue
+        keep_actor = False
         # OK, let's start processing events!
         # print("   there are ", len(actor_event_dict["value"]["updated"]), "update events in it")
         for event_index, event in enumerate(actor_event_dict["value"]["updated"]):
@@ -170,13 +219,35 @@ def get_replications(replications_list, time_stamp):
                 new_event_dict = get_new_event_dict(event)
                 if new_event_dict:
                     print('    adding event', event_index, ' to update list')
+                    loc = (new_event_dict["location"]["x"],
+                           new_event_dict["location"]["y"],
+                           new_event_dict["location"]["z"])
+                    rotq = (new_event_dict["rotation"]["quaternion"]["w"],
+                            new_event_dict["rotation"]["quaternion"]["x"],
+                            new_event_dict["rotation"]["quaternion"]["y"],
+                            new_event_dict["rotation"]["quaternion"]["z"])
                     new_replication_list.append({"time": time_stamp,
                                                  "actor_id": actor_id,
-                                                 "location": {key:new_event_dict["location"][key] for key in ["x", "y", "z"]},   #  ["value"]["rigid_body_state"] = rbd_dict.copy()
-                                                 "rotation": {key:new_event_dict["rotation"]["quaternion"][key] for key in ["w", "x", "y", "z"]}
+                                                 "event_type": "RBState",
+                                                 "loc": loc,
+                                                 "rot_q": rotq
                                                  })
                 else:
                     continue
+            elif event["name"] == "Engine.Pawn:PlayerReplicationInfo":
+                pri_id = get_pri_id(event)
+                new_replication_list.append({"time": time_stamp,
+                                             "actor_id": actor_id,
+                                             "event_type": "Pawn_PRI",
+                                             "pri_id": pri_id
+                                             })
+            elif event["name"] == "Engine.PlayerReplicationInfo:PlayerName":
+                player_name = event["value"]["string"]
+                new_replication_list.append({"time": time_stamp,
+                                             "actor_id": actor_id,
+                                             "event_type": "PRI_name",
+                                             "player_name": player_name
+                                             })
             else:
                 print('  xxx event name was >', event["name"], '... skipping')
 
@@ -201,11 +272,13 @@ def write_frames_json(frames_list, output_json_file):
 
     agFileTools.write_json(out_data, output_json_file)
 
+
 def class_mappings(input_json_file):
     data = agFileTools.read_json(input_json_file)
     class_maps_list = data["content"]["body"]["class_mappings"]
     output_json_file = input_json_file.replace('.json', '-class_mappings.json')
     agFileTools.write_json(class_maps_list, output_json_file)
+
 
 def caches(input_json_file):
     data = agFileTools.read_json(input_json_file)
@@ -262,6 +335,36 @@ def spawn_events(input_json_file):
     agFileTools.write_json(spawn_event_list, output_json_file)
     print('finished loop')
 
+
+def get_replication_value_types(input_json_file):
+    print('starting main loop w file>', input_json_file)
+    # load json file
+    frames_list = get_frames_json(input_json_file) # get content / body / frames
+    rep_value_types = []
+    print('Dictionary has>', len(frames_list), 'entries')
+    for i, frame_dict in enumerate(frames_list):
+        # if i > 20: break
+        # print('frame dict>', frame_dict)
+        if "replications" in frame_dict:
+            new_frame_dict = {}
+            frame_time = frame_dict["time"]
+            print('found replication at time> ', frame_time)
+            for rep_item in frame_dict["replications"]:
+                if "value" not in rep_item: continue
+                rep_value_keys = rep_item["value"].keys()
+                if rep_value_keys:
+                    for v in rep_value_keys:
+                        if v not in rep_value_types:
+                            rep_value_types.append(v)
+
+
+    # write results
+    output_json_file = input_json_file.replace('.json', '-replicationValueTypes.json')
+    agFileTools.write_json(rep_value_types, output_json_file)
+    #write_frames_json(new_frames_list, output_json_file)
+    print('finished looop')
+
+
 def get_event_types(input_json_file):
     print('starting main loop w file>', input_json_file)
     # load json file
@@ -285,10 +388,32 @@ def get_event_types(input_json_file):
     #write_frames_json(new_frames_list, output_json_file)
     print('finished looop')
 
-def get_update_events(input_json_file):
-    print('starting main loop w file>', input_json_file)
-    # load json file
-    frames_list = get_frames_json(input_json_file) # get content / body / frames
+
+def get_team_lists(data):
+    # populate two lists with the player names on each team
+    team_lists = [[],[]]
+    player_list = []
+    player_stats = data["header"]["body"]["properties"]["value"]["PlayerStats"]
+    for stat_dict in player_stats["value"]["array"]:
+        name = stat_dict["value"]["Name"]["value"]["str"]
+        team_int = stat_dict["value"]["Team"]["value"]["int"]
+        team_lists[team_int].append(name)
+        player_list.append({"player_name": name, "team": team_int})
+    print("Team 0 >", team_lists[0])
+    print("Team 1 >", team_lists[1])
+    return (team_lists[0],team_lists[1], player_list)
+
+def get_header_data(json_data):
+    header_data = {}
+    # for now, header is just team lists
+    (team_0, team_1, player_list) = get_team_lists(json_data)
+    header_data["player_list"] = player_list
+    header_data["team_0"] = team_0
+    header_data["team_1"] = team_1
+## instead lets make a player list
+    return header_data
+
+def get_update_events(frames_list):
     new_frames_list = []
     event_type_dict = {}
     spawn_event_list = []
@@ -312,14 +437,32 @@ def get_update_events(input_json_file):
                 continue
         else:
             continue
+    return new_frames_list
+
+
+def main(input_json_file):
+    print('starting main loop w file>', input_json_file)
+    # load json file
+    data = agFileTools.read_json(input_json_file)
+
+    header_data = get_header_data(data)
+    # for now, header is just player list, team lists
+
+    frames_list = data["content"]["body"]["frames"]
+    new_frames_list = get_update_events(frames_list) # get content / body / frames
 
     # write results
-    output_json_file = input_json_file.replace('.json', '-updates.json')
-    agFileTools.write_json(new_frames_list, output_json_file)
+    output_json_file = input_json_file.replace('.json', '-update2.json')
+    ######  MODIFY FOR body, header to save team lists
+    json_data = {"header":header_data, "events": new_frames_list }
+    agFileTools.write_json(json_data, output_json_file)
     #write_frames_json(new_frames_list, output_json_file)
     print('finished looop')
+
 
 #class_mappings(json_file)
 #caches(json_file)
 #get_update_events(json_file)
-get_event_types(json_file)
+#get_event_types(json_file)
+#get_replication_value_types(json_file)
+main(json_file)
