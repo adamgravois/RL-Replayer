@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 #
 import sys
+import json
 sys.path.append(r'T:\agTools\scripts')
 import agFileTools
 
 
 json_file = r"T:\RL-Replayer\scratch\replay_test_220926mini-trunc.json"
-event_names_list = ["TAGame.RBActor_TA:ReplicatedRBState"]
+event_names_list = ["TAGame.RBActor_TA:ReplicatedRBState", "TAGame.CarComponent_TA:Vehicle"]
+
+event_names_dict =  {"TAGame.RBActor_TA:ReplicatedRBState" : "RBState"
+                     }
+
+object_classes_list = ["TAGame.Ball_TA", "TAGame.Car_TA", "TAGame.CarComponent_Boost_TA"]
+
 
 replay_dict_struct = { "content":
                            {"body":
@@ -28,6 +35,20 @@ rbd_data_struct = {"location": {"x": 0, "y": 0, "z": 0},
                    }
 
 
+json_linebreaks_dict = ['{"player_name":', '"events":','{"time":', '"loc"']
+def write_json(data, file_path):
+    print('writing data to %s' % file_path)
+    n = open(file_path, "w")
+    json_string = json.dumps(data)
+    # go thru string
+    # when u find (substring) from list of substrings, add a newline in front of it
+    for j in json_linebreaks_dict:
+        j_newline = '\n'+j
+        json_string = json_string.replace(j, j_newline)
+    n.write(json_string)
+    n.close()
+
+
 def recursive_dict_compare(dict_a, dict_b):
     result_dict = {}
     for key, value in dict_a.items():
@@ -47,7 +68,7 @@ def get_rigid_body_data(rigid_body_state_dict):
     rbd_dict = recursive_dict_compare(rbd_data_struct, rigid_body_state_dict)
     return rbd_dict
 
-def get_new_event_dict(event):
+def get_RBState_dict(event):
     new_event_dict = {}  # event_dict_struct.copy()
     if "value" not in event:
         # print('   xxx no event value found, bailing')
@@ -191,32 +212,35 @@ def get_replications(replications_list, time_stamp):
         # just in case
         if "value" not in actor_event_dict: continue
         if "spawned" in actor_event_dict["value"]:
-            # get spawn type
+            # double check no bad data
             if "class_name" not in actor_event_dict["value"]["spawned"]: continue
             class_name = actor_event_dict["value"]["spawned"]["class_name"]
+            # get spawn type
             # if it's the type we're looking for, make an entry
-            if class_name == "TAGame.Ball_TA" or class_name == "TAGame.Car_TA":
+            if class_name in object_classes_list: # == "TAGame.Ball_TA" or class_name == "TAGame.Car_TA":
                 new_replication_list.append({"time": time_stamp,
                                              "actor_id": actor_id,
                                              "event_type": "spawned",
                                              "class_name": class_name})
-        if "destroyed" in actor_event_dict["value"]:
+            continue
+        elif "destroyed" in actor_event_dict["value"]:
             # get
             new_replication_list.append({"time": time_stamp,
                                          "actor_id": actor_id,
                                          "event_type": "destroyed"})
+            continue
+
         if "updated" not in actor_event_dict["value"]: continue
         keep_actor = False
         # OK, let's start processing events!
         # print("   there are ", len(actor_event_dict["value"]["updated"]), "update events in it")
         for event_index, event in enumerate(actor_event_dict["value"]["updated"]):
-            # print('---------- event number', event_index)
-            # get value / updated /  [0] / name
-            # print('   index>', event_index, 'event >', event)
+            print('---------- event name', event["name"])
+
             # Is it the kind of event we want?
             if event["name"] == "TAGame.RBActor_TA:ReplicatedRBState":
-                # go get em
-                new_event_dict = get_new_event_dict(event)
+                # go get
+                new_event_dict = get_RBState_dict(event)
                 if new_event_dict:
                     print('    adding event', event_index, ' to update list')
                     loc = (new_event_dict["location"]["x"],
@@ -247,6 +271,27 @@ def get_replications(replications_list, time_stamp):
                                              "actor_id": actor_id,
                                              "event_type": "PRI_name",
                                              "player_name": player_name
+                                             })
+            elif event["name"] == "TAGame.GameEvent_TA:ReplicatedRoundCountDownNumber":
+                countdown_num =  event["value"]["int"]
+                new_replication_list.append({"time": time_stamp,
+                                             "actor_id": actor_id,
+                                             "event_type": "Countdown",
+                                             "countdown_number": countdown_num
+                                             })
+            elif event["name"] == "TAGame.CarComponent_TA:ReplicatedActive":
+                active_value =  event["value"]["byte"]
+                new_replication_list.append({"time": time_stamp,
+                                             "actor_id": actor_id,
+                                             "event_type": "Active",
+                                             "active_value": active_value
+                                             })
+            elif event["name"] == "TAGame.CarComponent_TA:Vehicle":
+                vehicle_id =  event["value"]["flagged_int"]["int"]
+                new_replication_list.append({"time": time_stamp,
+                                             "actor_id": actor_id,
+                                             "event_type": "Vehicle",
+                                             "car_id": vehicle_id
                                              })
             else:
                 print('  xxx event name was >', event["name"], '... skipping')
@@ -455,7 +500,7 @@ def main(input_json_file):
     output_json_file = input_json_file.replace('.json', '-update2.json')
     ######  MODIFY FOR body, header to save team lists
     json_data = {"header":header_data, "events": new_frames_list }
-    agFileTools.write_json(json_data, output_json_file)
+    write_json(json_data, output_json_file)   #was agFileTools.
     #write_frames_json(new_frames_list, output_json_file)
     print('finished looop')
 
