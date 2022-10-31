@@ -2,11 +2,12 @@ import sys
 sys.path.append(r'T:\agTools\scripts')
 import agFileTools
 from pymel.core import *
+from importlib import reload
 import agMath
 import math
 import numpy as np
 import maya.api.OpenMaya as api
-
+reload(agMath)
 
 object_classes_list = ["TAGame.Ball_TA", "TAGame.Car_TA", "TAGame.CarComponent_Boost_TA"]
 
@@ -21,6 +22,17 @@ blue_geo = 'car_blue'
 orange_geo = 'car_orange'
 axis_geo = 'chonky_axis'
 boost_geo = 'boost_locator'
+
+# was 1 0 0 0  0 0 -1 0  0 1 0 0  0 0 0 1
+# but that doesnt match the other .. dropping last 1
+# flipping second -1 to 1
+#try identity matrix
+RHZ_2_LHY_MATRIX = np.array([
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0]
+])
 
 active_actors_list = []
 unclaimed_pawn_list = []
@@ -99,7 +111,7 @@ def get_actor_locator(actor_id, object_class):
             rotator_name = get_rotation_name(actor_id)
             rotator = spaceLocator(n= rotator_name)
             # set yxz rotatoin order, best so far ... nope, switching to yzx...
-            setAttr("%s.rotateOrder" % rotator, 1)
+            setAttr("%s.rotateOrder" % rotator, 0)
             print('   created actor > %s , rotator > %s' % (actor, rotator))
             parent(rotator, actor)
 
@@ -130,11 +142,22 @@ def get_actor_locator(actor_id, object_class):
 def key_location(actor_id, loc, frame_time):
     actor = PyNode(get_actor_name(actor_id) )
 
+    pm = matrixUtil(t=loc)
+    print('pm t>', pm)
+    npm = np.array(pm)
+    npm = npm.reshape([4,4])
+    print('npm t>', npm)
+
+    new_matrix = np.matmul(npm, RHZ_2_LHY_MATRIX)
+    nt = matrixUtil(np.ravel(new_matrix).tolist(), q=True, t=True)
+    print('new t>', nt)
+
     #print('location of ',actor_name, 'is', loc)
-    # note that we're flipping Y and Z -- source is z-up, maya is y-up
-    setKeyframe(actor, v=(loc[0]*scale_factor), at='tx', t=frame_time)
-    setKeyframe(actor, v=(loc[1]*scale_factor), at='tz', t=frame_time)
-    setKeyframe(actor, v=(loc[2]*scale_factor), at='ty', t=frame_time)
+    # NO LONGER: note that we're flipping Y and Z -- source is z-up, maya is y-up
+    #setKeyframe(actor, v=(loc[0]*scale_factor), at='tx', t=frame_time)
+    setKeyframe(actor, v=(nt[0] * scale_factor), at='tx', t=frame_time)
+    setKeyframe(actor, v=(nt[1] * scale_factor), at='ty', t=frame_time)
+    setKeyframe(actor, v=(nt[2] * scale_factor), at='tz', t=frame_time)
 
 
 def key_rotation(actor_id, rot_q, frame_time):
@@ -146,13 +169,45 @@ def key_rotation(actor_id, rot_q, frame_time):
     vector = np.array([rot_q[1], rot_q[2], rot_q[3]])
     unit_vector = vector / np.linalg.norm(vector)
     ## option one
-    #q = api.MQuaternion(rot_q[0], rot_q[1], rot_q[2], rot_q[3] )
-    q = api.MQuaternion(rot_q[0], unit_vector[0], unit_vector[1], unit_vector[2])
+    q = api.MQuaternion(rot_q[0], rot_q[1], rot_q[2], rot_q[3] )
+    # why doesnt this unit vector seem to be correct?
+    #q = api.MQuaternion(rot_q[0], unit_vector[0], unit_vector[1], unit_vector[2])
     e = q.asEulerRotation()
     r = list(map(math.degrees, e))
     r_x = r[0]
     r_y = r[1]
     r_z = r[2]
+
+    # option 4 matrix attempt
+
+    # option 5 matrix python
+    pm = matrixUtil(qt=[rot_q[0], rot_q[1], rot_q[2], rot_q[3] ])
+    #print('pm>',pm)
+    rt = matrixUtil(pm, q=True, r=True)
+    #print('rt>',rt)
+    rtd = np.degrees(rt)
+    #print('rtd>', rtd)
+    print('RTD > x %.2f y %.2f z %.2f' % (rtd[0], rtd[1], rtd[2]))
+    # convert pm to a numpy array
+    npm = np.array(pm)
+    npm = npm.reshape([4,4])
+    print('npm t>', npm)
+    # apply the Max-2-Maya Matrix transform!
+    new_matrix = np.matmul(npm, RHZ_2_LHY_MATRIX)
+    nr = matrixUtil(np.ravel(new_matrix).tolist(), q=True, r=True)
+    print('new r>', nr)
+
+    nrtd = np.degrees(nr)
+    print('RTD > x %.2f y %.2f z %.2f' % (nrtd[0], nrtd[1], nrtd[2]))
+
+    # TRY swapping X and Y... that's closer... but Y seems inverted...
+    # TRY inverting Y ... closer
+    # TRY swapping x and Z
+    # TRY inverting X and Z .... hmm, better but X is often wrong?
+    # TRY dont invert X .. best so far, still some swaps
+    r_x = nrtd[2]
+    r_y = -nrtd[0]
+    r_z = -nrtd[1]
 
     ## option two
     #q_rot = agMath.Quaternion._make(rot_q)
@@ -162,21 +217,23 @@ def key_rotation(actor_id, rot_q, frame_time):
     #r_y = agMath.convert_to_degrees(rot_rad.y)
     #r_z = agMath.convert_to_degrees(rot_rad.z)
     #print('rotation of', actor_name, 'is', r_x, r_y, r_z)
-    #
-    setKeyframe(actor, v=r_x, at='ry', t=frame_time)
     # try swapping rx & rz, as an experiment -- ok, that did create a better result, but not perfect
-    setKeyframe(actor, v=r_y, at='rx', t=frame_time)
+    # OK: ttrying no-conversion XYZ ... interesting but not quite there...
+    setKeyframe(actor, v=r_x, at='rx', t=frame_time)
+    setKeyframe(actor, v=r_y, at='ry', t=frame_time)
     setKeyframe(actor, v=r_z, at='rz', t=frame_time)
 
-    # also set the vector visualizart
+    # get updated quaternion
+    new_q = matrixUtil(np.ravel(new_matrix).tolist(), q=True, qt=True)
+    # also set the vector visualizer
     vector_visualizer = PyNode(get_vectorviz_name(actor_id))
-    setKeyframe(vector_visualizer, v=(unit_vector[0]*10), at='tx', t=frame_time)
-    setKeyframe(vector_visualizer, v=(unit_vector[1]*10), at='tz', t=frame_time)
-    setKeyframe(vector_visualizer, v=(unit_vector[2]*10), at='ty', t=frame_time)
+    setKeyframe(vector_visualizer, v=(new_q[1]*10), at='tx', t=frame_time)
+    setKeyframe(vector_visualizer, v=(new_q[2]*10), at='ty', t=frame_time)
+    setKeyframe(vector_visualizer, v=(new_q[3]*10), at='tz', t=frame_time)
 
     # OLD STYLE: transform the w value to swivel in degrees
     swivel = get_rotation_swivel_name(actor_id)
-    swivel_value = math.degrees(math.acos(rot_q[0]) * 2)
+    swivel_value = math.degrees(math.acos(new_q[0]) * 2)
     setKeyframe(swivel, v=swivel_value, at = 'rx', t=frame_time)
 
 def get_rigid_body_obj(rb_list, actor_id=-1, pri_id=-1, name="", boost_id=-1, cars_only=False):
@@ -431,6 +488,11 @@ def destroy_actors(event_dict, frame_time, rb_list):
 
         # in which case set that car.boost.actor_id to -1
 
+def show_countdown(event_dict, frame_time):
+    count = event_dict["countdown_number"]
+    print("COUNTDOWN!", count)
+    # Show Big Number based on count
+    # Big Number fade size
 
 def do_actor_events(event_dict, frame_time, rb_list):
     global active_actors_list
@@ -457,6 +519,8 @@ def do_actor_events(event_dict, frame_time, rb_list):
 
     if "RBState" in event_dict["event_type"]:
         if actor_id not in active_actors_list: return None
+        # maybe write this
+        #key_transforms(actor_id, event_dict["loc"], frame_time)
         key_location(actor_id, event_dict["loc"], frame_time)
         key_rotation(actor_id, event_dict["rot_q"], frame_time)
 
@@ -482,10 +546,13 @@ def do_actor_events(event_dict, frame_time, rb_list):
             else:
                 print('   wwwaaaaaaaa cant find car %d for this BOOST %d' % (car_id, actor_id))
 
+    if "Countdown" in event_dict["event_type"]:
+        show_countdown(event_dict, frame_time)
 
-    if "STOP" in event_dict["event_type"]:
+    if event_dict["event_type"] == "STOP":
         print("XXXXXXXXXXX Halting execution for STOP event")
-        sys.exit("Found STOP message")
+        # sys.exit("Found STOP message")
+        return "STOP"
 
 def create_rb_cam(rb):
     # add a camera to follow it around
@@ -567,12 +634,14 @@ def do_rotation_cleanup():
 
     rot_list = []
     for r in rotators:
-        rot_list.append("%s.rotateX" % r)
-        rot_list.append("%s.rotateY" % r)
-        rot_list.append("%s.rotateZ" % r)
+        r_curves = []
+        r_curves.append("%s.rotateX" % r)
+        r_curves.append("%s.rotateY" % r)
+        r_curves.append("%s.rotateZ" % r)
+        rot_list.append(r_curves)
 
-    #for r in rot_list:
-    #    filterCurve(r)
+    for r in rot_list:
+        filterCurve(r)
     ### Someday Solve This Rotation Stutff
 
 
@@ -589,6 +658,7 @@ def main(json_file):
 
     # start processing events
     first = True
+    result = None
     for i, event_dict in enumerate(update_list):
         #if i > 200: break
 
@@ -596,15 +666,16 @@ def main(json_file):
         frame_time = int (event_dict["time"] * 30)
         print('f=',frame_time, ' time=', event_dict["time"])
         # set playback start / end
-        if first:
-            playbackOptions(minTime = frame_time)
-            first = False
+        if event_dict["event_type"] == "Countdown":
+            if first:
+                playbackOptions(minTime = (frame_time-15))
+                first = False
         playbackOptions(maxTime = frame_time)
         # Go Do This Event 
-        do_actor_events(event_dict, frame_time, rb_list)
+        result = do_actor_events(event_dict, frame_time, rb_list)
 
         unclaimed_pawn_cleanup(frame_time, rb_list)
-
+        if result == "STOP": break
 
     do_rotation_cleanup()
 
