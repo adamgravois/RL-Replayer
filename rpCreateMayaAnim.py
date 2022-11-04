@@ -11,13 +11,12 @@ reload(agMath)
 
 object_classes_list = ["TAGame.Ball_TA", "TAGame.Car_TA", "TAGame.CarComponent_Boost_TA"]
 
-json_file = r"T:\RL-Replayer\scratch\replay_test_220926mini-trunc-update2.json"
+json_file = r"T:\RL-Replayer\scratch\replay_test_220926mini-trunc-update2-unswapped.json"
 maya_file = json_file.replace(".json", ".mb")
 scale_factor = 0.001
 
 maya_template = r"T:\RL-Replayer\scenes\pitch_simple\pitch-simple-02.mb"
-ball_geo = 'ball_voxel'
-car_geo = 'FordMustang_Yellow'
+ball_geo = 'ball_locator'
 blue_geo = 'car_blue'
 orange_geo = 'car_orange'
 axis_geo = 'chonky_axis'
